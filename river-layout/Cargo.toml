@@ -1,0 +1,9 @@
+[package]
+name = "river-layout"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+wayland-backend = "0.3.10"
+wayland-client = "0.31.10"
+wayland-scanner = "0.31.6"
