@@ -16,6 +16,8 @@ use wayland_client::Dispatch;
 use wayland_client::QueueHandle;
 use wayland_client::globals::GlobalListContents;
 use wayland_client::globals::registry_queue_init;
+use wayland_client::protocol::wl_output;
+use wayland_client::protocol::wl_output::WlOutput;
 use wayland_client::protocol::wl_registry;
 use wayland_client::protocol::wl_registry::WlRegistry;
 
@@ -31,20 +33,31 @@ pub struct View {
 }
 
 #[derive(Debug)]
-pub struct Layout<const VIEW_COUNT: usize> {
+pub struct GeneratedLayout<const N: usize> {
     name: Box<str>,
-    views: [View; VIEW_COUNT],
+    views: [View; N],
 }
-
-#[derive(Debug)]
-struct Serial(u32);
 
 #[derive(Debug)]
 struct State<L: LayoutGenerator> {
     layout_manager: RiverLayoutManagerV3,
     layout_generator: L,
     tags: Option<u32>,
+    outputs: Vec<Output>,
     exit: bool,
+}
+
+#[derive(Debug)]
+struct Output {
+    wl_output: WlOutput,
+    name: u32,
+    layout: Option<Layout>,
+}
+
+#[derive(Debug)]
+struct Layout {
+    river_layout: RiverLayoutV3,
+    output_name: String,
 }
 
 pub trait LayoutGenerator: Sized + 'static {
@@ -52,12 +65,12 @@ pub trait LayoutGenerator: Sized + 'static {
     type Err: std::error::Error;
 
     fn user_cmd(&mut self, tags: Option<u32>, output: &str, cmd: &str) -> Result<(), Self::Err>;
-    fn generate_layout<const VIEW_COUNT: usize>(
+    fn generate_layout<const N: usize>(
         &mut self,
         tags: u32,
         output: &str,
         usable_space: (u32, u32),
-    ) -> Result<Layout<VIEW_COUNT>, Self::Err>;
+    ) -> Result<GeneratedLayout<N>, Self::Err>;
 
     fn run(self) -> Result<(), Self::Err> {
         let conn = Connection::connect_to_env().unwrap(); // FIXME error handling
@@ -69,6 +82,7 @@ pub trait LayoutGenerator: Sized + 'static {
             layout_manager,
             layout_generator: self,
             tags: None,
+            outputs: vec![],
             exit: false,
         };
 
@@ -78,13 +92,75 @@ pub trait LayoutGenerator: Sized + 'static {
 
 impl<L: LayoutGenerator> Dispatch<WlRegistry, GlobalListContents> for State<L> {
     fn event(
-        _state: &mut Self,
-        _proxy: &WlRegistry,
-        _event: wl_registry::Event,
+        state: &mut Self,
+        wl_registry: &WlRegistry,
+        event: wl_registry::Event,
         _data: &GlobalListContents,
         _conn: &Connection,
-        _q: &QueueHandle<State<L>>,
+        queue: &QueueHandle<State<L>>,
     ) {
+        use wl_registry::Event;
+
+        match event {
+            Event::Global {
+                name,
+                interface,
+                version,
+            } if interface == "wl_output" => {
+                let wl_output: WlOutput = wl_registry.bind(name, version.min(4), queue, ());
+                state.outputs.push(Output {
+                    wl_output,
+                    name,
+                    layout: None,
+                });
+            }
+            Event::GlobalRemove { name } => {
+                if let Some(i) = state.outputs.iter().position(|output| output.name == name) {
+                    let output = state.outputs.remove(i);
+
+                    // TODO add to drop implementation
+                    if let Some(layout) = output.layout {
+                        layout.river_layout.destroy();
+                    }
+
+                    output.wl_output.release();
+                }
+            }
+            _ => (),
+        }
+    }
+}
+
+impl<L: LayoutGenerator> Dispatch<WlOutput, ()> for State<L> {
+    fn event(
+        state: &mut Self,
+        wl_output: &WlOutput,
+        event: wl_output::Event,
+        _data: &(),
+        _conn: &Connection,
+        queue: &QueueHandle<State<L>>,
+    ) {
+        let output = state
+            .outputs
+            .iter_mut()
+            .find(|output| &output.wl_output == wl_output)
+            .unwrap();
+
+        use wl_output::Event;
+
+        if let Event::Name { name: output_name } = event {
+            let river_layout =
+                state
+                    .layout_manager
+                    .get_layout(&wl_output, L::NAMESPACE.into(), queue, ());
+
+            let layout = Layout {
+                river_layout,
+                output_name,
+            };
+
+            output.layout = Some(layout);
+        }
     }
 }
 
@@ -95,29 +171,42 @@ impl<L: LayoutGenerator> Dispatch<RiverLayoutManagerV3, ()> for State<L> {
         _event: river_layout_manager_v3::Event,
         _data: &(),
         _conn: &Connection,
-        _q: &QueueHandle<State<L>>,
+        _queue: &QueueHandle<State<L>>,
     ) {
     }
 }
 
-impl<L: LayoutGenerator> Dispatch<RiverLayoutV3, Serial> for State<L> {
+impl<L: LayoutGenerator> Dispatch<RiverLayoutV3, ()> for State<L> {
     fn event(
         state: &mut Self,
-        _proxy: &RiverLayoutV3,
+        river_layout: &RiverLayoutV3,
         event: river_layout_v3::Event,
-        _data: &Serial,
+        _data: &(),
         _conn: &Connection,
-        _q: &QueueHandle<State<L>>,
+        _queue: &QueueHandle<State<L>>,
     ) {
+        let layout = state
+            .outputs
+            .iter()
+            .filter_map(|output| output.layout.as_ref())
+            .find(|layout| &layout.river_layout == river_layout)
+            .unwrap();
+
         use river_layout_v3::Event;
 
         match event {
             Event::NamespaceInUse => state.exit = true,
-            Event::LayoutDemand { .. } => (),
+            Event::LayoutDemand {
+                view_count,
+                usable_width,
+                usable_height,
+                tags,
+                serial,
+            } => {}
             Event::UserCommand { command } => {
                 state
                     .layout_generator
-                    .user_cmd(state.tags, "", &command)
+                    .user_cmd(state.tags, &layout.output_name, &command)
                     .unwrap();
             }
             Event::UserCommandTags { tags } => state.tags = Some(tags),
