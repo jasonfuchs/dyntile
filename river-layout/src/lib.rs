@@ -42,7 +42,7 @@ pub trait LayoutGenerator: Sized + 'static {
     type Err: std::error::Error;
 
     fn cmd(&mut self, tags: Option<u32>, output: &str, cmd: &str) -> Result<(), Self::Err>;
-    fn generated_layout(
+    fn generate_layout(
         &mut self,
         tags: u32,
         output: &str,
