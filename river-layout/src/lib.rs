@@ -78,6 +78,7 @@ pub enum Error {
     Connect(ConnectError),
     Global(GlobalError),
     Bind(BindError),
+    NamespaceInUse(&'static str),
 }
 
 impl std::fmt::Display for Error {
@@ -86,6 +87,9 @@ impl std::fmt::Display for Error {
             Error::Connect(err) => write!(f, "{err}"),
             Error::Global(err) => write!(f, "{err}"),
             Error::Bind(err) => write!(f, "{err}"),
+            Error::NamespaceInUse(ns) => {
+                write!(f, "the requested namespace \"{ns}\" is already in use")
+            }
         }
     }
 }
@@ -191,12 +195,34 @@ impl<LG: LayoutGenerator> Dispatch<river_layout_manager_v3::RiverLayoutManagerV3
 
 impl<LG: LayoutGenerator> Dispatch<river_layout_v3::RiverLayoutV3, LayoutData> for State<LG> {
     fn event(
-        _state: &mut State<LG>,
+        state: &mut State<LG>,
         _proxy: &river_layout_v3::RiverLayoutV3,
-        _event: river_layout_v3::Event,
-        _udata: &LayoutData,
+        event: river_layout_v3::Event,
+        udata: &LayoutData,
         _conn: &Connection,
         _qh: &QueueHandle<State<LG>>,
     ) {
+        use river_layout_v3::Event;
+
+        match event {
+            Event::NamespaceInUse => state.error = Some(Error::NamespaceInUse(LG::NAMESPACE)),
+            Event::UserCommandTags { tags } => state.tags = Some(tags),
+            Event::UserCommand { command } => {
+                if let Err(err) =
+                    state
+                        .layout_generator
+                        .cmd(state.tags, &udata.output_name, &command)
+                {
+                    eprintln!("Error: {err}");
+                }
+            }
+            Event::LayoutDemand {
+                view_count,
+                usable_width,
+                usable_height,
+                tags,
+                serial,
+            } => {}
+        }
     }
 }
