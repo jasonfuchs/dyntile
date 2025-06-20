@@ -49,7 +49,7 @@ pub trait LayoutGenerator: Sized + 'static {
         space: (u32, u32),
     ) -> Result<GeneratedLayout, Self::Err>;
 
-    fn run(self) -> Result<(), Error> {
+    fn run(self) -> Result<(), Error<Self>> {
         let conn = Connection::connect_to_env()?;
         let (globals, queue) = registry_queue_init::<State<Self>>(&conn)?;
         let river_layout_manager_v3 = globals.bind(&queue.handle(), 1..=2, ())?;
@@ -73,15 +73,27 @@ pub trait LayoutGenerator: Sized + 'static {
     }
 }
 
-#[derive(Debug)]
-pub enum Error {
+pub enum Error<LG: LayoutGenerator> {
     Connect(ConnectError),
     Global(GlobalError),
     Bind(BindError),
     NamespaceInUse(&'static str),
+    LayoutGenerator(LG::Err),
 }
 
-impl std::fmt::Display for Error {
+impl<LG: LayoutGenerator> std::fmt::Debug for Error<LG> {
+    fn fmt(&self, fmt: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
+        match self {
+            Error::Connect(err) => fmt.debug_tuple("Connect").field(err).finish(),
+            Error::Global(err) => fmt.debug_tuple("Global").field(err).finish(),
+            Error::Bind(err) => fmt.debug_tuple("Bind").field(err).finish(),
+            Error::NamespaceInUse(ns) => fmt.debug_tuple("NamespaceInUse").field(ns).finish(),
+            Error::LayoutGenerator(err) => fmt.debug_tuple("LayoutGenerator").field(err).finish(),
+        }
+    }
+}
+
+impl<LG: LayoutGenerator> std::fmt::Display for Error<LG> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
         match self {
             Error::Connect(err) => write!(f, "{err}"),
@@ -90,26 +102,27 @@ impl std::fmt::Display for Error {
             Error::NamespaceInUse(ns) => {
                 write!(f, "the requested namespace \"{ns}\" is already in use")
             }
+            Error::LayoutGenerator(err) => write!(f, "Layout generator error: {err}"),
         }
     }
 }
 
-impl std::error::Error for Error {}
+impl<LG: LayoutGenerator> std::error::Error for Error<LG> {}
 
-impl From<ConnectError> for Error {
-    fn from(err: ConnectError) -> Error {
+impl<LG: LayoutGenerator> From<ConnectError> for Error<LG> {
+    fn from(err: ConnectError) -> Self {
         Error::Connect(err)
     }
 }
 
-impl From<GlobalError> for Error {
-    fn from(err: GlobalError) -> Error {
+impl<LG: LayoutGenerator> From<GlobalError> for Error<LG> {
+    fn from(err: GlobalError) -> Self {
         Error::Global(err)
     }
 }
 
-impl From<BindError> for Error {
-    fn from(err: BindError) -> Error {
+impl<LG: LayoutGenerator> From<BindError> for Error<LG> {
+    fn from(err: BindError) -> Self {
         Error::Bind(err)
     }
 }
@@ -119,7 +132,7 @@ pub struct State<LG: LayoutGenerator> {
     river_layout_manager_v3: river_layout_manager_v3::RiverLayoutManagerV3,
     layout_generator: LG,
     tags: Option<u32>,
-    error: Option<Error>,
+    error: Option<Error<LG>>,
 }
 
 impl<LG: LayoutGenerator> Dispatch<wl_registry::WlRegistry, GlobalListContents> for State<LG> {
