@@ -29,6 +29,7 @@ use protocol::river_layout_v3;
 #[derive(Debug)]
 pub struct GeneratedLayout {
     views: Vec<ViewDimensions>,
+    name: String,
 }
 
 #[derive(Debug)]
@@ -46,7 +47,8 @@ pub trait LayoutGenerator: Sized + 'static {
         &mut self,
         tags: u32,
         output: &str,
-        space: (u32, u32),
+        usable_space: (u32, u32),
+        view_count: usize,
     ) -> Result<GeneratedLayout, Self::Err>;
 
     fn run(self) -> Result<(), Error<Self>> {
@@ -209,7 +211,7 @@ impl<LG: LayoutGenerator> Dispatch<river_layout_manager_v3::RiverLayoutManagerV3
 impl<LG: LayoutGenerator> Dispatch<river_layout_v3::RiverLayoutV3, LayoutData> for State<LG> {
     fn event(
         state: &mut State<LG>,
-        _proxy: &river_layout_v3::RiverLayoutV3,
+        proxy: &river_layout_v3::RiverLayoutV3,
         event: river_layout_v3::Event,
         udata: &LayoutData,
         _conn: &Connection,
@@ -235,7 +237,57 @@ impl<LG: LayoutGenerator> Dispatch<river_layout_v3::RiverLayoutV3, LayoutData> f
                 usable_height,
                 tags,
                 serial,
-            } => {}
+            } => {
+                fn layout_demand<LG: LayoutGenerator>(
+                    state: &mut State<LG>,
+                    proxy: &river_layout_v3::RiverLayoutV3,
+                    udata: &LayoutData,
+
+                    view_count: u32,
+                    usable_width: u32,
+                    usable_height: u32,
+                    tags: u32,
+                    serial: u32,
+                ) -> Result<(), Error<LG>> {
+                    let view_count = view_count as usize;
+                    let generated_layout = state
+                        .layout_generator
+                        .generate_layout(
+                            tags,
+                            &udata.output_name,
+                            (usable_width, usable_height),
+                            view_count,
+                        )
+                        .map_err(Error::LayoutGenerator)?;
+
+                    assert_eq!(generated_layout.views.len(), view_count);
+
+                    for view in generated_layout.views {
+                        let ViewDimensions {
+                            location: (x, y),
+                            space: (width, height),
+                        } = view;
+
+                        proxy.push_view_dimensions(x, y, width, height, serial);
+                    }
+
+                    proxy.commit(generated_layout.name, serial);
+
+                    Ok(())
+                }
+
+                state.error = layout_demand(
+                    state,
+                    proxy,
+                    udata,
+                    view_count,
+                    usable_width,
+                    usable_height,
+                    tags,
+                    serial,
+                )
+                .err();
+            }
         }
     }
 }
