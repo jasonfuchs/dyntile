@@ -14,7 +14,9 @@ pub mod protocol {
 use wayland_client::ConnectError;
 use wayland_client::Connection;
 use wayland_client::Dispatch;
+use wayland_client::DispatchError;
 use wayland_client::QueueHandle;
+use wayland_client::backend::WaylandError;
 use wayland_client::globals::BindError;
 use wayland_client::globals::GlobalError;
 use wayland_client::globals::GlobalListContents;
@@ -53,10 +55,10 @@ pub trait LayoutGenerator: Sized + 'static {
 
     fn run(self) -> Result<(), Error<Self>> {
         let conn = Connection::connect_to_env()?;
-        let (globals, queue) = registry_queue_init::<State<Self>>(&conn)?;
+        let (globals, mut queue) = registry_queue_init::<State<Self>>(&conn)?;
         let river_layout_manager_v3 = globals.bind(&queue.handle(), 1..=2, ())?;
 
-        let state = State {
+        let mut state = State {
             river_layout_manager_v3,
             layout_generator: self,
             tags: None,
@@ -64,11 +66,14 @@ pub trait LayoutGenerator: Sized + 'static {
         };
 
         'event_loop: loop {
+            queue.dispatch_pending(&mut state)?;
             if let Some(ref err) = state.error {
                 match err {
                     _ => break 'event_loop,
                 }
             }
+
+            queue.flush()?;
         }
 
         state.error.map_or(Ok(()), Err)
@@ -79,6 +84,8 @@ pub enum Error<LG: LayoutGenerator> {
     Connect(ConnectError),
     Global(GlobalError),
     Bind(BindError),
+    Dispatch(DispatchError),
+    Wayland(WaylandError),
     NamespaceInUse(&'static str),
     LayoutGenerator(LG::Err),
 }
@@ -89,6 +96,8 @@ impl<LG: LayoutGenerator> std::fmt::Debug for Error<LG> {
             Error::Connect(err) => fmt.debug_tuple("Connect").field(err).finish(),
             Error::Global(err) => fmt.debug_tuple("Global").field(err).finish(),
             Error::Bind(err) => fmt.debug_tuple("Bind").field(err).finish(),
+            Error::Dispatch(err) => fmt.debug_tuple("Dispatch").field(err).finish(),
+            Error::Wayland(err) => fmt.debug_tuple("Wayland").field(err).finish(),
             Error::NamespaceInUse(ns) => fmt.debug_tuple("NamespaceInUse").field(ns).finish(),
             Error::LayoutGenerator(err) => fmt.debug_tuple("LayoutGenerator").field(err).finish(),
         }
@@ -101,6 +110,8 @@ impl<LG: LayoutGenerator> std::fmt::Display for Error<LG> {
             Error::Connect(err) => write!(f, "{err}"),
             Error::Global(err) => write!(f, "{err}"),
             Error::Bind(err) => write!(f, "{err}"),
+            Error::Dispatch(err) => write!(f, "{err}"),
+            Error::Wayland(err) => write!(f, "{err}"),
             Error::NamespaceInUse(ns) => {
                 write!(f, "the requested namespace \"{ns}\" is already in use")
             }
@@ -126,6 +137,18 @@ impl<LG: LayoutGenerator> From<GlobalError> for Error<LG> {
 impl<LG: LayoutGenerator> From<BindError> for Error<LG> {
     fn from(err: BindError) -> Self {
         Error::Bind(err)
+    }
+}
+
+impl<LG: LayoutGenerator> From<DispatchError> for Error<LG> {
+    fn from(err: DispatchError) -> Self {
+        Error::Dispatch(err)
+    }
+}
+
+impl<LG: LayoutGenerator> From<WaylandError> for Error<LG> {
+    fn from(err: WaylandError) -> Self {
+        Error::Wayland(err)
     }
 }
 
