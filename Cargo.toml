@@ -4,3 +4,5 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+river-layout = { version = "0.1.0", path = "river-layout" }
+wayland-client = "0.31.10"
