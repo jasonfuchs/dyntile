@@ -28,16 +28,16 @@ use wayland_client::protocol::wl_registry;
 use protocol::river_layout_manager_v3;
 use protocol::river_layout_v3;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct GeneratedLayout {
-    views: Vec<ViewDimensions>,
-    name: String,
+    pub views: Vec<ViewDimensions>,
+    pub name: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub struct ViewDimensions {
-    location: (i32, i32),
-    space: (u32, u32),
+    pub location: (i32, i32),
+    pub space: (u32, u32),
 }
 
 pub trait LayoutGenerator: Sized + 'static {
