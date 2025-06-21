@@ -66,14 +66,12 @@ pub trait LayoutGenerator: Sized + 'static {
         };
 
         'event_loop: loop {
-            queue.dispatch_pending(&mut state)?;
+            queue.blocking_dispatch(&mut state)?;
             if let Some(ref err) = state.error {
                 match err {
                     _ => break 'event_loop,
                 }
             }
-
-            queue.flush()?;
         }
 
         state.error.map_or(Ok(()), Err)
