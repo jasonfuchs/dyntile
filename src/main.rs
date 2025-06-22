@@ -17,21 +17,20 @@ fn main() {
     let display = conn.display();
     display.get_registry(&qh, ());
 
-    let mut state = State {
-        layout_manager: None,
-        tags: None,
-        should_exit: false,
-    };
+    let mut state = State::Uninit;
 
-    while !state.should_exit {
+    while let State::Uninit { .. } | State::Init { .. } = state {
         event_queue.blocking_dispatch(&mut state).unwrap();
     }
 }
 
-struct State {
-    layout_manager: Option<river_layout_manager_v3::RiverLayoutManagerV3>,
-    tags: Option<u32>,
-    should_exit: bool,
+enum State {
+    Uninit,
+    Init {
+        layout_manager: river_layout_manager_v3::RiverLayoutManagerV3,
+        tags: Option<u32>,
+    },
+    ShouldExit,
 }
 
 impl Dispatch<wl_registry::WlRegistry, ()> for State {
@@ -59,7 +58,10 @@ impl Dispatch<wl_registry::WlRegistry, ()> for State {
                     let layout_manager: river_layout_manager_v3::RiverLayoutManagerV3 =
                         registry.bind(name, version, &qh, ());
 
-                    state.layout_manager = Some(layout_manager);
+                    *state = State::Init {
+                        layout_manager,
+                        tags: None,
+                    };
                 }
                 _ => (),
             }
@@ -78,13 +80,14 @@ impl Dispatch<wl_output::WlOutput, ()> for State {
     ) {
         dbg!(&event);
 
-        match event {
-            wl_output::Event::Name { .. } => {
-                if let Some(ref layout_manager) = state.layout_manager {
+        match state {
+            State::Init { layout_manager, .. } => match event {
+                wl_output::Event::Name { .. } => {
                     let _layout: river_layout_v3::RiverLayoutV3 =
                         layout_manager.get_layout(output, "dyntile".into(), &qh, ());
                 }
-            }
+                _ => (),
+            },
             _ => (),
         }
     }
@@ -103,22 +106,27 @@ impl Dispatch<river_layout_v3::RiverLayoutV3, ()> for State {
     ) {
         dbg!(&event);
 
-        match event {
-            river_layout_v3::Event::UserCommandTags { tags } => state.tags = Some(tags),
-            river_layout_v3::Event::NamespaceInUse => state.should_exit = true,
-            river_layout_v3::Event::LayoutDemand {
-                view_count,
-                usable_width,
-                usable_height,
-                tags: _,
-                serial,
-            } => {
-                for _ in 0..view_count {
-                    layout.push_view_dimensions(0, 0, usable_width, usable_height, serial);
-                }
+        match state {
+            State::Init { tags, .. } => match event {
+                river_layout_v3::Event::UserCommandTags {
+                    tags: user_command_tags,
+                } => *tags = Some(user_command_tags),
+                river_layout_v3::Event::NamespaceInUse => *state = State::ShouldExit,
+                river_layout_v3::Event::LayoutDemand {
+                    view_count,
+                    usable_width,
+                    usable_height,
+                    tags: _,
+                    serial,
+                } => {
+                    for _ in 0..view_count {
+                        layout.push_view_dimensions(0, 0, usable_width, usable_height, serial);
+                    }
 
-                layout.commit("[ ]".into(), serial);
-            }
+                    layout.commit("[ ]".into(), serial);
+                }
+                _ => (),
+            },
             _ => (),
         }
     }
